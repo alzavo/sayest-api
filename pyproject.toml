@@ -1,0 +1,9 @@
+[project]
+name = "sayest-api"
+version = "0.1.0"
+description = "API for the pronunciation assessment model. Accepts audio with transcription and returns scores."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.123.7",
+]
