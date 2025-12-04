@@ -1,7 +1,15 @@
 from fastapi import FastAPI
+from app.api.routes import router
+from app.core.lifespan import lifespan
+from app.core.logging import setup_logging
 
-app = FastAPI()
+setup_logging()
 
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to SayEst API"}
+app = FastAPI(
+    title="SayEst API",
+    description="API for the pronunciation assessment model. Accepts audio with transcription and returns scores.",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.include_router(router)

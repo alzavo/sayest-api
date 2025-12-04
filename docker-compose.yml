@@ -1,0 +1,19 @@
+services:
+  api:
+    build: .
+    container_name: captcha-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    restart: always
+
+  test:
+    build: .
+    container_name: captcha-test
+    command: >
+      sh -c "pytest app/tests/ --disable-warnings --maxfail=5 --tb=short"
+    depends_on:
+      - api
+    volumes:
+      - .:/app
