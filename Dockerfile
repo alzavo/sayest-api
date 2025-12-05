@@ -1,18 +1,32 @@
-FROM python:3.9
+FROM python:3.12-slim
 
-WORKDIR /app
+ARG QUALITY_MODEL_REPO_ID=alzavo/sayest-quality
+ARG DURATION_MODEL_REPO_ID=alzavo/sayest-duration
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    QUALITY_MODEL_REPO_ID=${QUALITY_MODEL_REPO_ID} \
+    DURATION_MODEL_REPO_ID=${DURATION_MODEL_REPO_ID} \
+    QUALITY_MODEL_PATH=/models/${QUALITY_MODEL_REPO_ID} \
+    DURATION_MODEL_PATH=/models/${DURATION_MODEL_REPO_ID} \
+    HF_HOME=/models
+
+WORKDIR /code
+
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/
+COPY pyproject.toml uv.lock ./
+RUN uv pip install --system --no-cache .
+
+
+COPY download_model.py .
+RUN python download_model.py
+
+ENV HF_HUB_OFFLINE=1
 
 COPY . .
 
-ENV PYTHONPATH=/app
-
-COPY copy_env.sh /copy_env.sh
-RUN chmod +x /copy_env.sh
-ENTRYPOINT ["/copy_env.sh"]
-
-EXPOSE 8000
-
-CMD ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", "-b", "0.0.0.0:8000", "-w", "2", "-t", "120"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

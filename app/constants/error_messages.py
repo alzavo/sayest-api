@@ -1,6 +1,0 @@
-UNSUPPORTED_MEDIA_TYPE = "Unsupported file type. Please upload PNG or JPEG."
-FAILED_TO_READ = "Failed to read uploaded image."
-FILE_TOO_LARGE = "File too large"
-INVALID_DIMENSIONS = "Invalid image dimensions. Expected 65x25 pixels."
-MODEL_NOT_AVAILABLE = "Model is not available."
-PREPROCESSING_ERROR = "Image preprocessing error."

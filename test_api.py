@@ -8,6 +8,7 @@ AUDIO_FILE_PATH = "/home/aleksei/dev/sayest/audio/L1/e7cd-68c0-b5df-35b0_aia_tak
 PHONEMES = "a i j a"
 WORD = "aia"
 
+
 def test_prediction():
     # 1. Check if file exists
     if not os.path.exists(AUDIO_FILE_PATH):
@@ -16,20 +17,21 @@ def test_prediction():
 
     # 2. Prepare the payload
     # 'data' contains form fields
-    payload = {
-        "phonemes": PHONEMES,
-        "word": WORD
-    }
+    payload = {"phonemes": PHONEMES, "word": WORD}
 
     # 'files' contains the binary audio data
     # format: 'fieldname': ('filename', open_file_handle, 'content_type')
     files = {
-        "audio": (os.path.basename(AUDIO_FILE_PATH), open(AUDIO_FILE_PATH, "rb"), "audio/wav")
+        "audio": (
+            os.path.basename(AUDIO_FILE_PATH),
+            open(AUDIO_FILE_PATH, "rb"),
+            "audio/wav",
+        )
     }
 
     try:
         print(f"Sending request to {API_URL}...")
-        
+
         # 3. Send POST request
         response = requests.post(API_URL, data=payload, files=files)
 
@@ -50,6 +52,7 @@ def test_prediction():
     finally:
         # Close the file handle
         files["audio"][1].close()
+
 
 if __name__ == "__main__":
     test_prediction()
