@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.12-slim
 
 ARG QUALITY_MODEL_REPO_ID=alzavo/sayest-quality
@@ -13,14 +14,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /code
 
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && \
     apt-get install -y ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/
 COPY pyproject.toml uv.lock ./
-RUN uv pip install --system --no-cache .
-
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system .
 
 COPY download_model.py .
 RUN python download_model.py
