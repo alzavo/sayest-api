@@ -135,7 +135,6 @@ def create_gradio_app(app: FastAPI) -> gr.Blocks:
         )
 
         with gr.Row():
-            gr.Textbox(label="Word")
             phoneme_text_input = gr.Textbox(label="Phonemes (space-separated)")
             audio_input = gr.Audio(type="filepath", label="Audio File (.wav)")
 
