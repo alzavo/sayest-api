@@ -18,6 +18,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pytest>=8.3.4",
     "requests>=2.32.5",
     "ruff>=0.14.7",
 ]
