@@ -57,12 +57,12 @@ docker build -t sayest-api:latest .
 
 Run container:
 ```bash
-docker run -p 8000:8000 --env-file .env sayest-api:latest
+docker run -p 8000:8000 sayest-api:latest
 ```
 
 ### Dockerfile notes
 
-The Docker image is built on `python:3.12-slim`, installs `ffmpeg` for audio decoding, and uses `uv` to install Python deps from `pyproject.toml`/`uv.lock`. It then downloads the models during build (so runtime can be offline) and launches `uvicorn`. Model repo IDs can be overridden at build time via `--build-arg QUALITY_MODEL_REPO_ID=...` and `--build-arg DURATION_MODEL_REPO_ID=...`.
+The Docker image is built on `python:3.12-slim`, installs `ffmpeg` for audio decoding, and uses `uv` to install Python deps from `pyproject.toml`/`uv.lock`. It then downloads the models during build (so runtime can be offline) and launches `uvicorn`.
 
 Health check (API up):
 ```bash
