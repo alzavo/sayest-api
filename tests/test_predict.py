@@ -118,3 +118,44 @@ def test_predict_handles_audio_exception(client, monkeypatch):
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Invalid audio file."
+
+
+def test_predict_handles_inference_exception(client, monkeypatch):
+    from app.api import routes as routes_module
+
+    monkeypatch.setattr(
+        routes_module, "process_audio_bytes", lambda _b: torch.zeros(1, 16000)
+    )
+
+    def fake_run_model_inference(_waveform, _phonemes, _model, _processor):
+        raise RuntimeError("Boom")
+
+    monkeypatch.setattr(routes_module, "run_model_inference", fake_run_model_inference)
+    client.app.state.models = {"quality": ("m", "p"), "duration": ("m", "p")}
+
+    response = client.post(
+        "/predict",
+        data={"phonemes": "a i", "word": "ai"},
+        files={"audio": ("test.wav", b"fake", "audio/wav")},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal model error."
+
+
+def test_predict_missing_audio_file(client):
+    response = client.post(
+        "/predict",
+        data={"phonemes": "a i", "word": "ai"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_predict_missing_phonemes(client):
+    response = client.post(
+        "/predict",
+        files={"audio": ("test.wav", b"fake", "audio/wav")},
+    )
+
+    assert response.status_code == 422
