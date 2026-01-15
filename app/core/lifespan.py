@@ -23,7 +23,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Lifespan: Failed to load models: {e}")
 
-
     finally:
         if hasattr(app.state, "models"):
             app.state.models.clear()

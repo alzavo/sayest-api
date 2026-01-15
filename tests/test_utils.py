@@ -85,7 +85,9 @@ def test_run_model_inference_scores(monkeypatch):
             input_values = audio_input.unsqueeze(0)
             attention_mask = torch.ones_like(input_values, dtype=torch.long)
             return type(
-                "Processed", (), {"input_values": input_values, "attention_mask": attention_mask}
+                "Processed",
+                (),
+                {"input_values": input_values, "attention_mask": attention_mask},
             )
 
     class FakeOutputs:
