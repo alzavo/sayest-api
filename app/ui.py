@@ -6,7 +6,9 @@ from app.constants.phonemes import ALL_PHONEMES
 from app.model.utils import (
     process_audio_bytes,
     run_model_inference,
+    parse_delta_value,
 )
+from app.constants.environmental_variables import QUALITY_PROB_GAP_DELTA
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,13 +106,14 @@ def create_gradio_app(app: FastAPI) -> gr.Blocks:
         phoneme_list = phoneme_text.strip().split()
         q_model, q_proc = app.state.models["quality"]
         d_model, d_proc = app.state.models["duration"]
+        quality_delta = parse_delta_value(QUALITY_PROB_GAP_DELTA)
 
-        def run(model, proc):
-            return run_model_inference(waveform, phoneme_list, model, proc)
+        def run(model, proc, delta=None):
+            return run_model_inference(waveform, phoneme_list, model, proc, delta, 0)
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            q_future = executor.submit(run, q_model, q_proc)
-            d_future = executor.submit(run, d_model, d_proc)
+            q_future = executor.submit(run, q_model, q_proc, quality_delta)
+            d_future = executor.submit(run, d_model, d_proc, None)
             q_scores = q_future.result()
             d_scores = d_future.result()
 

@@ -2,7 +2,8 @@ from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from app.api.schemas import PredictionResponse, ErrorResponse
 from app.constants.phonemes import ALL_PHONEMES
-from app.model.utils import process_audio_bytes, run_model_inference
+from app.constants.environmental_variables import QUALITY_PROB_GAP_DELTA
+from app.model.utils import process_audio_bytes, run_model_inference, parse_delta_value
 import logging
 
 logger = logging.getLogger(__name__)
@@ -48,9 +49,16 @@ async def predict_phonemes(
     try:
         q_model, q_proc = request.app.state.models["quality"]
         d_model, d_proc = request.app.state.models["duration"]
+        quality_delta = parse_delta_value(QUALITY_PROB_GAP_DELTA)
 
         q_scores = await run_in_threadpool(
-            run_model_inference, waveform, phoneme_list, q_model, q_proc
+            run_model_inference,
+            waveform,
+            phoneme_list,
+            q_model,
+            q_proc,
+            quality_delta,
+            0,
         )
         d_scores = await run_in_threadpool(
             run_model_inference, waveform, phoneme_list, d_model, d_proc
