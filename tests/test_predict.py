@@ -24,7 +24,7 @@ def test_predict_happy_path(client, monkeypatch):
         routes_module, "process_audio_bytes", lambda _b: torch.zeros(1, 16000)
     )
 
-    def fake_run_model_inference(_waveform, phonemes, _model, _processor):
+    def fake_run_model_inference(_waveform, phonemes, _model, _processor, *_args):
         return [1 for _ in phonemes]
 
     monkeypatch.setattr(routes_module, "run_model_inference", fake_run_model_inference)

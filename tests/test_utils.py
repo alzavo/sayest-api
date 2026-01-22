@@ -125,3 +125,50 @@ def test_run_model_inference_scores(monkeypatch):
 
     assert processor.tokenizer.seen_tokens == ["a", "i"]
     assert scores == [1, 3]
+
+
+def test_run_model_inference_applies_delta_for_correct_class():
+    class FakeTokenizer:
+        def convert_tokens_to_ids(self, tokens):
+            return [5, 6]
+
+    class FakeProcessor:
+        def __init__(self):
+            self.tokenizer = FakeTokenizer()
+
+        def __call__(self, audio_input, sampling_rate, return_tensors, padding):
+            input_values = audio_input.unsqueeze(0)
+            attention_mask = torch.ones_like(input_values, dtype=torch.long)
+            return type(
+                "Processed",
+                (),
+                {"input_values": input_values, "attention_mask": attention_mask},
+            )
+
+    class FakeOutputs:
+        def __init__(self, logits):
+            self.logits = logits
+
+    class FakeModel:
+        device = torch.device("cpu")
+
+        def __call__(
+            self,
+            input_values,
+            attention_mask,
+            canonical_token_ids,
+            token_lengths,
+            token_mask,
+        ):
+            scores = torch.tensor([[[0.0, 0.02, -2.0], [0.0, 1.5, -2.0]]])
+            return FakeOutputs({"head": scores})
+
+    waveform = torch.zeros(1, 16000)
+    processor = FakeProcessor()
+    model = FakeModel()
+
+    scores = utils_module.run_model_inference(
+        waveform, ["a", "i"], model, processor, delta=0.02, correct_index=0
+    )
+
+    assert scores == [1, 2]
