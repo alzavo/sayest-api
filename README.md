@@ -7,6 +7,34 @@ API for pronunciation assessment. Accepts audio + transcription (phonemes) and r
 Required variables (use `.env` or export them):
 - `QUALITY_MODEL_PATH` - path or repo id for the quality model
 - `DURATION_MODEL_PATH` - path or repo id for the duration model
+- `QUALITY_PROB_GAP_DELTA` - optional float; if set, small probability gaps favor score 1 for quality
+
+### Quality delta example
+
+With `QUALITY_PROB_GAP_DELTA=0.02`, the quality score uses probability gap tolerance to favor score 1
+when the model is only slightly more confident in an incorrect score.
+
+Example logits for two phonemes:
+```text
+[[0.0, 0.03, -2.0], [0.0, 1.5, -2.0]]
+```
+
+Rule:
+- Compute softmax probabilities.
+- If an incorrect class is higher than the correct class, but the gap is within delta,
+  return score 1 instead of the argmax score.
+
+Phoneme 1 calculation:
+- exp(0.0)=1, exp(0.03)=1.03045, exp(-2)=0.13534, sum=2.16579
+- p_correct = 1 / 2.16579 = 0.4617
+- p_best_incorrect = 1.03045 / 2.16579 = 0.4760
+- gap = 0.4760 - 0.4617 = 0.0143 <= 0.02 → return score 1
+
+Phoneme 2 calculation:
+- exp(0.0)=1, exp(1.5)=4.4817, exp(-2)=0.13534, sum=5.6170
+- p_correct = 1 / 5.6170 = 0.1781
+- p_best_incorrect = 4.4817 / 5.6170 = 0.7977
+- gap = 0.7977 - 0.1781 = 0.6196 > 0.02 → return score 2
 
 ## Development
 
