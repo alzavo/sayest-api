@@ -59,7 +59,9 @@ def parse_delta_value(value):
     return delta
 
 
-def run_model_inference(waveform, phonemes, model, processor, delta=None, correct_index=0):
+def run_model_inference(
+    waveform, phonemes, model, processor, delta=None, correct_index=0
+):
     """Runs the PyTorch inference for a single model."""
     device = model.device
 
