@@ -19,7 +19,12 @@ RUN --mount=type=cache,target=/var/cache/apt \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system .
+    uv pip install --system \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple \
+    torch==2.8.0 \
+    torchaudio==2.8.0 \
+    .
 
 COPY download_model.py .
 RUN python download_model.py
