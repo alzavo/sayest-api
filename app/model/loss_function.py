@@ -11,12 +11,14 @@ class OrdinalLogLoss(nn.Module):
         distance_matrix=None,
         class_weights=None,
         eps=1e-8,
+        ignore_index=-100,
     ):
         super(OrdinalLogLoss, self).__init__()
         self.num_classes = num_classes
         self.alpha = alpha
         self.reduction = reduction
         self.eps = eps
+        self.ignore_index = ignore_index
 
         if distance_matrix is not None:
             assert distance_matrix.shape == (num_classes, num_classes), (
@@ -37,20 +39,38 @@ class OrdinalLogLoss(nn.Module):
             self.class_weights = None
 
     def forward(self, logits, target):
-        probs = torch.softmax(logits, dim=1).clamp(max=1 - self.eps)
-        distances = self.distance_matrix[target] ** self.alpha
-        per_class_loss = -torch.log(1 - probs + self.eps)
-        loss = (per_class_loss * distances).sum(dim=1)  # shape (batch_size,)
+        if logits.numel() == 0:
+            return logits.new_tensor(0.0)
 
-        # Apply class weights
-        if self.class_weights is not None:
-            sample_weights = self.class_weights[target]
-            loss = loss * sample_weights
+        probs = torch.softmax(logits, dim=-1).clamp(max=1 - self.eps)
 
-        # Apply reduction
-        if self.reduction == "mean":
-            return loss.mean()
-        elif self.reduction == "sum":
-            return loss.sum()
+        if self.ignore_index is not None:
+            valid_mask = target != self.ignore_index
         else:
-            return loss
+            valid_mask = torch.ones_like(target, dtype=torch.bool)
+
+        if not valid_mask.any():
+            if self.reduction == "none":
+                return logits.new_zeros(target.shape, dtype=logits.dtype)
+            return logits.new_tensor(0.0)
+
+        active_probs = probs[valid_mask]
+        active_target = target[valid_mask]
+        distances = self.distance_matrix[active_target] ** self.alpha
+        per_class_loss = -torch.log(1 - active_probs + self.eps)
+        loss_active = (per_class_loss * distances).sum(dim=-1)
+
+        if self.class_weights is not None:
+            sample_weights = self.class_weights[active_target]
+            loss_active = loss_active * sample_weights
+
+        if self.reduction == "none":
+            full_loss = logits.new_zeros(target.shape, dtype=logits.dtype)
+            full_loss[valid_mask] = loss_active
+            return full_loss
+
+        if self.reduction == "mean":
+            return loss_active.mean()
+        if self.reduction == "sum":
+            return loss_active.sum()
+        raise ValueError(f"Unsupported reduction: {self.reduction}")

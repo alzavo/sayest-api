@@ -12,10 +12,6 @@ from app.model.loss_function import OrdinalLogLoss
 
 
 class GOPWav2Vec2Config(PretrainedConfig):
-    """
-    Configuration for GOP-enhanced model that wraps a Wav2Vec2ForCTC backbone.
-    """
-
     model_type = "gop-wav2vec2"
 
     def __init__(
@@ -34,6 +30,7 @@ class GOPWav2Vec2Config(PretrainedConfig):
         unk_id: Optional[int] = None,
         bos_id: Optional[int] = None,
         eos_id: Optional[int] = None,
+        word_boundary_id: Optional[int] = None,
         token_id_vocab: Optional[List[int]] = None,
         ctc_config: Optional[dict] = None,
         **kwargs,
@@ -58,16 +55,12 @@ class GOPWav2Vec2Config(PretrainedConfig):
         self.unk_id = unk_id
         self.bos_id = bos_id
         self.eos_id = eos_id
+        self.word_boundary_id = word_boundary_id
         self.token_id_vocab = token_id_vocab
         self.ctc_config = ctc_config
 
 
 class GOPPhonemeClassifier(PreTrainedModel):
-    """
-    GOP classifier that wraps a pretrained Wav2Vec2ForCTC backbone.
-    Computes per-phoneme scores using GOP-derived features + a small Transformer + classifier head.
-    """
-
     config_class = GOPWav2Vec2Config
 
     def __init__(
@@ -87,12 +80,12 @@ class GOPPhonemeClassifier(PreTrainedModel):
         self.ctc_model = Wav2Vec2ForCTC(backbone_config)
         self.config.ctc_config = backbone_config.to_dict()
 
-        # Special ids
         self.blank_id = config.pad_id
         self.unk_id = config.unk_id
         self.bos_id = config.bos_id
         self.eos_id = config.eos_id
         self.pad_id = self.blank_id
+        self.word_boundary_id = config.word_boundary_id
 
         special_ids = {
             self.blank_id,
@@ -118,17 +111,21 @@ class GOPPhonemeClassifier(PreTrainedModel):
             padding_idx=self.pad_id if self.pad_id is not None else 0,
         )
         self.combined_feature_dim = self.gop_feature_dim + self.embedding_dim
+        self.gop_part_dropout = nn.Dropout(config.gop_transformer_dropout)
+        self.gop_part_norm = nn.LayerNorm(self.gop_feature_dim)
 
-        enc_layer = nn.TransformerEncoderLayer(
-            d_model=self.combined_feature_dim,
-            nhead=config.gop_transformer_nhead,
-            dim_feedforward=config.gop_transformer_dim_feedforward,
-            dropout=config.gop_transformer_dropout,
-            activation=F.relu,
+        self.lstm_hidden_size = int(config.gop_transformer_dim_feedforward)
+        self.gop_rnn = nn.LSTM(
+            input_size=self.combined_feature_dim,
+            hidden_size=self.lstm_hidden_size,
+            num_layers=config.gop_transformer_nlayers,
+            dropout=(
+                config.gop_transformer_dropout
+                if config.gop_transformer_nlayers > 1
+                else 0.0
+            ),
+            bidirectional=True,
             batch_first=True,
-        )
-        self.gop_transformer_encoder = nn.TransformerEncoder(
-            enc_layer, num_layers=config.gop_transformer_nlayers
         )
 
         head_label_config = getattr(config, "gop_head_labels", None)
@@ -139,9 +136,19 @@ class GOPPhonemeClassifier(PreTrainedModel):
                 )
             head_label_config = {"default": int(config.num_gop_labels)}
         self.head_label_config = {str(k): int(v) for k, v in head_label_config.items()}
+        self.head_hidden_dim = self.lstm_hidden_size * 2
+        self.head_mlps = nn.ModuleDict(
+            {
+                head: nn.Sequential(
+                    nn.Linear(self.head_hidden_dim, self.head_hidden_dim),
+                    nn.LeakyReLU(),
+                )
+                for head in self.head_label_config.keys()
+            }
+        )
         self.classifiers = nn.ModuleDict(
             {
-                head: nn.Linear(self.combined_feature_dim, num_labels)
+                head: nn.Linear(self.head_hidden_dim, num_labels)
                 for head, num_labels in self.head_label_config.items()
             }
         )
@@ -205,7 +212,6 @@ class GOPPhonemeClassifier(PreTrainedModel):
         target_ids: torch.Tensor,
         target_lengths: torch.Tensor,
     ) -> torch.Tensor:
-        """CTC log p(target|input) per item for a batch."""
         target_ids_cpu = target_ids.cpu()
         target_lengths_cpu = target_lengths.cpu()
         log_probs_cpu = log_probs_TNC.cpu()
@@ -241,8 +247,6 @@ class GOPPhonemeClassifier(PreTrainedModel):
             )
 
     def _get_feat_extract_output_lengths(self, input_lengths: torch.LongTensor):
-        """Compute time dimension after backbone feature extractor."""
-
         def _conv_out_length(input_length, kernel_size, stride):
             return (
                 torch.div(input_length - kernel_size, stride, rounding_mode="floor") + 1
@@ -253,6 +257,124 @@ class GOPPhonemeClassifier(PreTrainedModel):
         ):
             input_lengths = _conv_out_length(input_lengths, kernel_size, stride)
         return input_lengths
+
+    def _prepare_labels(
+        self, labels: Optional[Union[torch.Tensor, Dict[str, torch.Tensor]]]
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        if labels is None:
+            return None
+        if isinstance(labels, torch.Tensor):
+            if len(self.head_label_config) != 1:
+                raise ValueError(
+                    "Multi-head setup requires `labels` to be a dict keyed by head name."
+                )
+            head_name = next(iter(self.head_label_config))
+            return {head_name: labels}
+        if not isinstance(labels, dict):
+            raise ValueError(
+                "`labels` must be a Tensor for single-head setups or a dict for multi-head setups."
+            )
+        return labels
+
+    def _validate_inputs(
+        self,
+        input_values: torch.Tensor,
+        attention_mask: torch.Tensor,
+        canonical_token_ids: torch.Tensor,
+        token_lengths: torch.Tensor,
+        token_mask: torch.Tensor,
+        labels: Optional[Dict[str, torch.Tensor]],
+    ) -> torch.Tensor:
+        if input_values.dim() != 2:
+            raise ValueError(
+                f"`input_values` must be 2D (batch, time); got shape {tuple(input_values.shape)}."
+            )
+        if attention_mask is None or attention_mask.shape != input_values.shape:
+            raise ValueError(
+                "`attention_mask` must be provided and match the shape of `input_values`."
+            )
+
+        if canonical_token_ids is None or token_lengths is None or token_mask is None:
+            raise ValueError(
+                "`canonical_token_ids`, `token_lengths`, and `token_mask` are required."
+            )
+
+        if canonical_token_ids.dim() != 2:
+            raise ValueError(
+                f"`canonical_token_ids` must be 2D (batch, tokens); got shape {tuple(canonical_token_ids.shape)}."
+            )
+        batch_size, max_tokens = canonical_token_ids.shape
+        if batch_size != input_values.shape[0]:
+            raise ValueError(
+                "Batch size mismatch between `input_values` and `canonical_token_ids`."
+            )
+
+        if token_mask.dim() != 2 or token_mask.shape != canonical_token_ids.shape:
+            raise ValueError(
+                "`token_mask` must be the same shape as `canonical_token_ids`."
+            )
+
+        if token_lengths.dim() != 1 or token_lengths.shape[0] != batch_size:
+            raise ValueError(
+                "`token_lengths` must be 1D with length equal to batch size."
+            )
+        if torch.any(token_lengths < 0):
+            raise ValueError("`token_lengths` must be non-negative.")
+        if torch.any(token_lengths > max_tokens):
+            raise ValueError(
+                "`token_lengths` cannot exceed the number of provided tokens."
+            )
+
+        token_mask_bool = token_mask.to(
+            device=canonical_token_ids.device, dtype=torch.bool
+        )
+        arange_positions = torch.arange(max_tokens, device=canonical_token_ids.device)
+        padded_active = token_mask_bool & (
+            arange_positions.unsqueeze(0) >= token_lengths.unsqueeze(1)
+        )
+        if torch.any(padded_active):
+            raise ValueError(
+                "`token_mask` marks padded positions as valid (indices >= token_lengths)."
+            )
+        if torch.any(token_mask_bool.sum(dim=1) > token_lengths):
+            raise ValueError(
+                "`token_mask` has more active positions than `token_lengths` for some batch items."
+            )
+
+        if labels is not None:
+            if not isinstance(labels, dict):
+                raise ValueError(
+                    "`labels` must be a dict keyed by head name after normalization."
+                )
+            expected_heads = set(self.head_label_config.keys())
+            label_heads = set(labels.keys())
+            unknown_heads = label_heads - expected_heads
+            missing_heads = expected_heads - label_heads
+            if unknown_heads:
+                raise ValueError(
+                    f"Unexpected label heads provided: {sorted(unknown_heads)}."
+                )
+            if missing_heads:
+                raise ValueError(f"Missing label heads: {sorted(missing_heads)}.")
+            for head, head_labels in labels.items():
+                if head_labels.shape != canonical_token_ids.shape:
+                    raise ValueError(
+                        f"Labels for head '{head}' must match `canonical_token_ids` shape "
+                        f"{tuple(canonical_token_ids.shape)}; got {tuple(head_labels.shape)}."
+                    )
+                if head_labels.dtype not in (torch.int64, torch.long):
+                    raise ValueError(
+                        f"Labels for head '{head}' must be integer tensors; got dtype {head_labels.dtype}."
+                    )
+                masked_positions = token_mask_bool.logical_not()
+                bad_mask = masked_positions & (head_labels != -100)
+                if torch.any(bad_mask):
+                    bad_count = int(bad_mask.sum().item())
+                    raise ValueError(
+                        f"Labels for head '{head}' must be -100 at masked positions; found {bad_count} mismatches."
+                    )
+
+        return token_mask_bool
 
     def forward(
         self,
@@ -271,6 +393,7 @@ class GOPPhonemeClassifier(PreTrainedModel):
         return_dict = (
             return_dict if return_dict is not None else self.config.use_return_dict
         )
+        labels = self._prepare_labels(labels)
 
         if self.training or labels is not None:
             if (
@@ -287,7 +410,15 @@ class GOPPhonemeClassifier(PreTrainedModel):
                 "`token_mask` must be provided to GOPPhonemeClassifier.forward."
             )
 
-        # 1) Backbone forward to get hidden states
+        token_mask_bool = self._validate_inputs(
+            input_values=input_values,
+            attention_mask=attention_mask,
+            canonical_token_ids=canonical_token_ids,
+            token_lengths=token_lengths,
+            token_mask=token_mask,
+            labels=labels,
+        ).to(device=device)
+
         outputs = self.ctc_model.wav2vec2(
             input_values,
             attention_mask=attention_mask,
@@ -297,209 +428,118 @@ class GOPPhonemeClassifier(PreTrainedModel):
         )
         hidden_states = outputs.last_hidden_state
 
-        # 2) Frame-level logits for CTC
         logits_ctc = self.ctc_model.lm_head(hidden_states)
         log_probs_ctc = F.log_softmax(logits_ctc, dim=-1)
         log_probs_TNC = log_probs_ctc.permute(1, 0, 2).contiguous()
 
-        # 3) Frame lengths
         batch_size = input_values.size(0)
-        if attention_mask is None:
-            input_lengths_frames = torch.full(
-                (batch_size,), log_probs_TNC.size(0), dtype=torch.long, device=device
-            )
-        else:
-            input_lengths_samples = attention_mask.sum(dim=-1)
-            input_lengths_frames = self._get_feat_extract_output_lengths(
-                input_lengths_samples
-            )
-            input_lengths_frames = torch.clamp(
-                input_lengths_frames, max=log_probs_TNC.size(0)
-            )
-
-        # 4) GOP feature calculation over tokens
-        max_token_len = (
-            canonical_token_ids.size(1) if canonical_token_ids is not None else 0
+        input_lengths_samples = attention_mask.sum(dim=-1)
+        input_lengths_frames = self._get_feat_extract_output_lengths(
+            input_lengths_samples
         )
-        batch_combined_features_list = [[] for _ in range(batch_size)]
-        token_mask_bool = token_mask.to(device=device).bool()
+        input_lengths_frames = torch.clamp(
+            input_lengths_frames, max=log_probs_TNC.size(0)
+        )
+
+        max_token_len = canonical_token_ids.size(1) if canonical_token_ids is not None else 0
+        batch_combined_features_list = []
+
+        token_embeddings = self.token_embedding(canonical_token_ids)
 
         lpp_log_prob_batch = self._calculate_log_prob(
             log_probs_TNC, input_lengths_frames, canonical_token_ids, token_lengths
         )
 
         for token_idx in range(max_token_len):
-            current_token_ids = canonical_token_ids[:, token_idx]
-            current_token_embeddings = self.token_embedding(current_token_ids)
-            token_out_of_bounds_mask = token_idx >= token_lengths
-            mask_column = (
-                token_mask_bool[:, token_idx]
-                if token_mask_bool.dim() == 2
-                else token_mask_bool
-            )
-            skip_mask = token_out_of_bounds_mask | ~mask_column
-
-            if skip_mask.all():
-                continue
-
-            active_mask = ~skip_mask
+            current_token_embeddings = token_embeddings[:, token_idx, :]
+            active_mask = token_mask_bool[:, token_idx]
+            skip_mask = ~active_mask
 
             all_sub_log_probs = []
-            if self.token_id_vocab:
-                for sub_token_id in self.token_id_vocab:
-                    sub_ids_batch = canonical_token_ids.clone()
-                    sub_ids_batch[active_mask, token_idx] = sub_token_id
-                    log_prob_sub_batch = self._calculate_log_prob(
-                        log_probs_TNC,
-                        input_lengths_frames,
-                        sub_ids_batch,
-                        token_lengths,
-                    )
-                    all_sub_log_probs.append(log_prob_sub_batch)
-
-            if all_sub_log_probs:
-                sub_lpr_batch = lpp_log_prob_batch.unsqueeze(1) - torch.stack(
-                    all_sub_log_probs, dim=1
+            for sub_token_id in self.token_id_vocab:
+                sub_ids_batch = canonical_token_ids.clone()
+                sub_ids_batch[active_mask, token_idx] = sub_token_id
+                log_prob_sub_batch = self._calculate_log_prob(
+                    log_probs_TNC, input_lengths_frames, sub_ids_batch, token_lengths
                 )
-                sub_lpr_batch = torch.nan_to_num(
-                    sub_lpr_batch, nan=0.0, posinf=1e10, neginf=-1e10
-                )
-                if skip_mask.any():
-                    sub_lpr_batch[skip_mask, :] = 0.0
-            else:
-                sub_lpr_batch = torch.zeros((batch_size, 0), device=device)
+                all_sub_log_probs.append(log_prob_sub_batch)
 
-            # Deletion GOP component
+            sub_log_probs_batch = torch.stack(all_sub_log_probs, dim=1)
+            sub_log_probs_batch = F.log_softmax(sub_log_probs_batch, dim=1)
+            sub_log_probs_batch = torch.nan_to_num(
+                sub_log_probs_batch, nan=0.0, posinf=1e10, neginf=-1e10
+            )
+            if skip_mask.any():
+                sub_log_probs_batch[skip_mask, :] = 0.0
+
             del_lpr_list = []
             for b_idx in range(batch_size):
                 if skip_mask[b_idx]:
                     del_lpr_list.append(torch.tensor(-1e10, device=device))
-                    continue
-                item_tokens = canonical_token_ids[
-                    b_idx, : token_lengths[b_idx]
-                ].tolist()
-                del_tokens_list = item_tokens[:token_idx] + item_tokens[token_idx + 1 :]
-                if not del_tokens_list:
-                    log_prob_del_item = torch.tensor(-float("inf"), device=device)
                 else:
-                    del_ids_tensor = torch.tensor(
-                        [del_tokens_list],
-                        dtype=torch.long,
-                        device=canonical_token_ids.device,
+                    item_tokens = canonical_token_ids[
+                        b_idx, : token_lengths[b_idx]
+                    ].tolist()
+                    del_tokens_list = item_tokens[:token_idx] + item_tokens[token_idx + 1 :]
+                    if not del_tokens_list:
+                        log_prob_del_item = torch.tensor(-float("inf"), device=device)
+                    else:
+                        del_ids_tensor = torch.tensor(
+                            [del_tokens_list],
+                            dtype=torch.long,
+                            device=canonical_token_ids.device,
+                        )
+                        del_len_tensor = torch.tensor(
+                            [len(del_tokens_list)],
+                            dtype=torch.long,
+                            device=canonical_token_ids.device,
+                        )
+                        log_probs_item_TNC = log_probs_TNC[:, b_idx : b_idx + 1, :]
+                        input_len_item = input_lengths_frames[b_idx : b_idx + 1]
+                        log_prob_del_item = self._calculate_log_prob(
+                            log_probs_item_TNC,
+                            input_len_item,
+                            del_ids_tensor,
+                            del_len_tensor,
+                        )
+                        if log_prob_del_item.dim() > 0:
+                            log_prob_del_item = log_prob_del_item[0]
+                    lpr_del_item = lpp_log_prob_batch[b_idx] - log_prob_del_item
+                    lpr_del_item = torch.nan_to_num(
+                        lpr_del_item, nan=0.0, posinf=1e10, neginf=-1e10
                     )
-                    del_len_tensor = torch.tensor(
-                        [len(del_tokens_list)],
-                        dtype=torch.long,
-                        device=canonical_token_ids.device,
-                    )
-                    log_probs_item_TNC = log_probs_TNC[:, b_idx : b_idx + 1, :]
-                    input_len_item = input_lengths_frames[b_idx : b_idx + 1]
-                    log_prob_del_item = self._calculate_log_prob(
-                        log_probs_item_TNC,
-                        input_len_item,
-                        del_ids_tensor,
-                        del_len_tensor,
-                    )
-                    if log_prob_del_item.dim() > 0:
-                        log_prob_del_item = log_prob_del_item[0]
-                lpr_del_item = lpp_log_prob_batch[b_idx] - log_prob_del_item
-                lpr_del_item = torch.nan_to_num(
-                    lpr_del_item, nan=0.0, posinf=1e10, neginf=-1e10
-                )
-                del_lpr_list.append(lpr_del_item)
+                    del_lpr_list.append(lpr_del_item)
             del_lpr_batch = torch.stack(del_lpr_list)
 
             gop_part = torch.cat(
                 [
                     lpp_log_prob_batch.unsqueeze(1),
-                    sub_lpr_batch,
+                    sub_log_probs_batch,
                     del_lpr_batch.unsqueeze(1),
                 ],
                 dim=1,
             )
+            gop_part = self.gop_part_norm(gop_part)
+            gop_part = self.gop_part_dropout(gop_part)
             combined_features = torch.cat([gop_part, current_token_embeddings], dim=1)
-            for b_idx in range(batch_size):
-                if active_mask[b_idx]:
-                    batch_combined_features_list[b_idx].append(combined_features[b_idx])
+            batch_combined_features_list.append(combined_features)
 
-        # 5) Pad phoneme feature sequences and mask
-        feature_lengths_list = [
-            len(seq_list) for seq_list in batch_combined_features_list
-        ]
-        if feature_lengths_list:
-            feature_lengths = torch.tensor(
-                feature_lengths_list, dtype=torch.long, device=device
-            )
-            target_pad_len = int(feature_lengths.max().item())
-        else:
-            feature_lengths = torch.zeros(
-                (batch_size,), dtype=torch.long, device=device
-            )
-            target_pad_len = 0
+        transformer_input = torch.stack(batch_combined_features_list, dim=1)
 
-        padded_sequences = []
-        for seq_list in batch_combined_features_list:
-            if seq_list:
-                seq_tensor = torch.stack(seq_list, dim=0)
-                pad_len = target_pad_len - seq_tensor.size(0)
-                if pad_len > 0:
-                    seq_tensor = F.pad(seq_tensor, (0, 0, 0, pad_len))
-                padded_sequences.append(seq_tensor)
-            else:
-                padded_sequences.append(
-                    torch.zeros(
-                        (target_pad_len, self.combined_feature_dim), device=device
-                    )
-                )
-        transformer_input = (
-            torch.stack(padded_sequences, dim=0)
-            if padded_sequences
-            else torch.zeros((0, 0, self.combined_feature_dim), device=device)
-        )
-        transformer_padding_mask = (
-            torch.arange(target_pad_len, device=device)[None, :]
-            >= feature_lengths[:, None]
-        )
+        gop_rnn_output, _ = self.gop_rnn(transformer_input)
 
-        # 6) GOP transformer
-        gop_transformer_output = self.gop_transformer_encoder(
-            transformer_input, src_key_padding_mask=transformer_padding_mask
-        )
+        final_logits = {}
+        for head, classifier in self.classifiers.items():
+            head_features = self.head_mlps[head](gop_rnn_output)
+            final_logits[head] = classifier(head_features)
 
-        # 7) Per-phoneme classifier (multi-head)
-        final_logits = {
-            head: classifier(gop_transformer_output)
-            for head, classifier in self.classifiers.items()
-        }
-
-        # 8) Loss
         loss = None
         if labels is not None:
-            if isinstance(labels, torch.Tensor):
-                label_map = {next(iter(final_logits.keys())): labels}
-            elif isinstance(labels, dict):
-                label_map = labels
-            else:
-                raise TypeError(
-                    "labels must be a Tensor or a dict of Tensors when provided."
-                )
-
-            active_mask = ~transformer_padding_mask.view(-1)
+            loss = 0.0
             for head, head_logits in final_logits.items():
-                head_labels = label_map.get(head)
-                if head_labels is None:
-                    continue
-                logits_flat = head_logits.view(-1, head_logits.size(-1))
-                labels_flat = head_labels.view(-1)
-                active_logits = logits_flat[active_mask]
-                # breakpoint()
-                active_labels = labels_flat[active_mask]
-                if active_labels.numel() == 0:
-                    continue
-                head_loss = self.loss_fns[head](active_logits, active_labels)
-                loss = head_loss if loss is None else loss + head_loss
-            if loss is None:
-                loss = torch.tensor(0.0, device=device, requires_grad=True)
+                head_labels = labels[head]
+                head_loss = self.loss_fns[head](head_logits, head_labels)
+                loss += head_loss
 
         if not return_dict:
             output = (final_logits,)
