@@ -1,7 +1,7 @@
 import torch
 import torchaudio
 from io import BytesIO
-from transformers import Wav2Vec2Processor, QuantoConfig
+from transformers import Wav2Vec2Processor
 from app.model.gop_model import GOPPhonemeClassifier
 from app.constants.audio_properties import (
     MAX_AUDIO_DURATION_SECONDS,
@@ -16,11 +16,7 @@ logger = logging.getLogger(__name__)
 def load_model_and_processor(model_repo_id: str):
     """Loads a specific model and processor."""
     logger.info(f"Loading model: {model_repo_id}")
-    quantization_config = QuantoConfig(weights="int8")
-
-    model = GOPPhonemeClassifier.from_pretrained(
-        model_repo_id, quantization_config=quantization_config, device_map="auto"
-    )
+    model = GOPPhonemeClassifier.from_pretrained(model_repo_id, device_map="auto")
     processor = Wav2Vec2Processor.from_pretrained(model_repo_id)
     model.eval()
     return model, processor
@@ -59,10 +55,39 @@ def parse_delta_value(value):
     return delta
 
 
-def run_model_inference(
-    waveform, phonemes, model, processor, delta=None, correct_index=0
-):
-    """Runs the PyTorch inference for a single model."""
+def _predict_scores(scores_tensor, delta=None, correct_index=0):
+    num_classes = scores_tensor.size(-1)
+    use_delta = delta is not None and delta > 0 and 0 <= correct_index < num_classes
+
+    if use_delta:
+        probs = torch.softmax(scores_tensor, dim=-1)
+        correct_probs = probs[..., correct_index]
+        incorrect_probs = probs.clone()
+        incorrect_probs[..., correct_index] = -float("inf")
+        max_incorrect_probs, _ = incorrect_probs.max(dim=-1)
+        argmax_scores = probs.argmax(dim=-1)
+        within_delta = (max_incorrect_probs > correct_probs) & (
+            (max_incorrect_probs - correct_probs) <= delta
+        )
+        predicted_scores = torch.where(
+            within_delta,
+            torch.tensor(correct_index, device=scores_tensor.device),
+            argmax_scores,
+        )
+    else:
+        if delta is not None and (correct_index < 0 or correct_index >= num_classes):
+            logger.warning(
+                "Delta provided but correct_index=%s is out of range for %s classes.",
+                correct_index,
+                num_classes,
+            )
+        predicted_scores = torch.argmax(scores_tensor, dim=-1)
+
+    return [int(score) + 1 for score in predicted_scores[0].cpu().tolist()]
+
+
+def run_model_inference(waveform, phonemes, model, processor, deltas=None, correct_index=0):
+    """Runs the PyTorch inference for the multihead model."""
     device = model.device
 
     audio_input = waveform.squeeze(0)
@@ -92,41 +117,15 @@ def run_model_inference(
             token_mask=token_mask,
         )
 
-    logits = outputs.logits
-    head_name = next(iter(logits))
-    scores_tensor = logits[head_name]
-    print(f"[inference] head={head_name} logits={scores_tensor[0].cpu().tolist()}")
-    num_classes = scores_tensor.size(-1)
-    use_delta = delta is not None and delta > 0 and 0 <= correct_index < num_classes
-    if use_delta:
-        probs = torch.softmax(scores_tensor, dim=-1)
-        print(f"[inference] probs={probs[0].cpu().tolist()}")
-        correct_probs = probs[..., correct_index]
-        incorrect_probs = probs.clone()
-        incorrect_probs[..., correct_index] = -float("inf")
-        max_incorrect_probs, _ = incorrect_probs.max(dim=-1)
-        argmax_scores = probs.argmax(dim=-1)
-        within_delta = (max_incorrect_probs > correct_probs) & (
-            (max_incorrect_probs - correct_probs) <= delta
-        )
-        print(
-            "[inference] correct_probs="
-            f"{correct_probs[0].cpu().tolist()} max_incorrect_probs="
-            f"{max_incorrect_probs[0].cpu().tolist()} delta={delta} within_delta="
-            f"{within_delta[0].cpu().tolist()}"
-        )
-        predicted_scores = torch.where(
-            within_delta,
-            torch.tensor(correct_index, device=scores_tensor.device),
-            argmax_scores,
-        )
-    else:
-        if delta is not None and (correct_index < 0 or correct_index >= num_classes):
-            logger.warning(
-                "Delta provided but correct_index=%s is out of range for %s classes.",
-                correct_index,
-                num_classes,
-            )
-        predicted_scores = torch.argmax(scores_tensor, dim=-1)
+    if not isinstance(outputs.logits, dict):
+        raise TypeError("Expected multihead logits dict from model output.")
 
-    return [int(s) + 1 for s in predicted_scores[0].cpu().tolist()]
+    head_deltas = deltas or {}
+    return {
+        head_name: _predict_scores(
+            scores_tensor,
+            delta=head_deltas.get(head_name),
+            correct_index=correct_index,
+        )
+        for head_name, scores_tensor in outputs.logits.items()
+    }

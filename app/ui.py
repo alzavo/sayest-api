@@ -1,4 +1,3 @@
-from concurrent.futures import ThreadPoolExecutor
 import logging
 from fastapi import FastAPI
 import gradio as gr
@@ -8,7 +7,10 @@ from app.model.utils import (
     run_model_inference,
     parse_delta_value,
 )
-from app.constants.environmental_variables import QUALITY_PROB_GAP_DELTA
+from app.constants.environmental_variables import (
+    QUALITY_PROB_GAP_DELTA,
+    DURATION_PROB_GAP_DELTA,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,9 +86,9 @@ def create_gradio_app(app: FastAPI) -> gr.Blocks:
                 "",
             )
 
-        if not hasattr(app.state, "models") or not app.state.models:
+        if not hasattr(app.state, "model_artifacts"):
             return (
-                "<p style='text-align:center; color:red;'>Models are not loaded.</p>",
+                "<p style='text-align:center; color:red;'>Model is not loaded.</p>",
                 "",
             )
 
@@ -104,18 +106,27 @@ def create_gradio_app(app: FastAPI) -> gr.Blocks:
             )
 
         phoneme_list = phoneme_text.strip().split()
-        q_model, q_proc = app.state.models["quality"]
-        d_model, d_proc = app.state.models["duration"]
-        quality_delta = parse_delta_value(QUALITY_PROB_GAP_DELTA)
+        model, processor = app.state.model_artifacts
 
-        def run(model, proc, delta=None):
-            return run_model_inference(waveform, phoneme_list, model, proc, delta, 0)
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            q_future = executor.submit(run, q_model, q_proc, quality_delta)
-            d_future = executor.submit(run, d_model, d_proc, None)
-            q_scores = q_future.result()
-            d_scores = d_future.result()
+        scores_by_head = run_model_inference(
+            waveform,
+            phoneme_list,
+            model,
+            processor,
+            {
+                "quality": parse_delta_value(QUALITY_PROB_GAP_DELTA),
+                "duration": parse_delta_value(DURATION_PROB_GAP_DELTA),
+            },
+            0,
+        )
+        q_scores = scores_by_head.get("quality")
+        d_scores = scores_by_head.get("duration")
+        if q_scores is None or d_scores is None:
+            logger.error("Model output is missing required heads: %s", scores_by_head.keys())
+            return (
+                "<p style='text-align:center; color:red;'>Internal model error.</p>",
+                "",
+            )
 
         quality_html = generate_html_output(phoneme_list, q_scores, "quality")
         duration_html = generate_html_output(phoneme_list, d_scores, "duration")
