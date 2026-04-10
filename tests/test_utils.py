@@ -113,9 +113,11 @@ def test_run_model_inference_scores(monkeypatch):
             assert canonical_token_ids.shape[1] == 2
             assert token_lengths.item() == 2
             assert token_mask.shape == canonical_token_ids.shape
-            # Argmax index per phoneme (0-based) is then shifted by +1 to match 1..N scoring.
-            scores = torch.tensor([[[2.0, 1.0, 0.0], [0.0, 1.0, 3.0]]])
-            return FakeOutputs({"head": scores})
+            quality_scores = torch.tensor([[[2.0, 1.0, 0.0], [0.0, 1.0, 3.0]]])
+            duration_scores = torch.tensor([[[3.0, 1.0], [0.0, 4.0]]])
+            return FakeOutputs(
+                {"quality": quality_scores, "duration": duration_scores}
+            )
 
     waveform = torch.zeros(1, 16000)
     processor = FakeProcessor()
@@ -124,7 +126,7 @@ def test_run_model_inference_scores(monkeypatch):
     scores = utils_module.run_model_inference(waveform, ["a", "i"], model, processor)
 
     assert processor.tokenizer.seen_tokens == ["a", "i"]
-    assert scores == [1, 3]
+    assert scores == {"quality": [1, 3], "duration": [1, 2]}
 
 
 def test_run_model_inference_applies_delta_for_correct_class():
@@ -160,15 +162,23 @@ def test_run_model_inference_applies_delta_for_correct_class():
             token_lengths,
             token_mask,
         ):
-            scores = torch.tensor([[[0.0, 0.02, -2.0], [0.0, 1.5, -2.0]]])
-            return FakeOutputs({"head": scores})
+            quality_scores = torch.tensor([[[0.0, 0.02, -2.0], [0.0, 1.5, -2.0]]])
+            duration_scores = torch.tensor([[[0.0, 0.02], [0.0, 1.5]]])
+            return FakeOutputs(
+                {"quality": quality_scores, "duration": duration_scores}
+            )
 
     waveform = torch.zeros(1, 16000)
     processor = FakeProcessor()
     model = FakeModel()
 
     scores = utils_module.run_model_inference(
-        waveform, ["a", "i"], model, processor, delta=0.02, correct_index=0
+        waveform,
+        ["a", "i"],
+        model,
+        processor,
+        deltas={"quality": 0.02, "duration": 0.02},
+        correct_index=0,
     )
 
-    assert scores == [1, 2]
+    assert scores == {"quality": [1, 2], "duration": [1, 2]}

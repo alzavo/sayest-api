@@ -25,10 +25,13 @@ def test_predict_happy_path(client, monkeypatch):
     )
 
     def fake_run_model_inference(_waveform, phonemes, _model, _processor, *_args):
-        return [1 for _ in phonemes]
+        return {
+            "quality": [1 for _ in phonemes],
+            "duration": [1 for _ in phonemes],
+        }
 
     monkeypatch.setattr(routes_module, "run_model_inference", fake_run_model_inference)
-    client.app.state.models = {"quality": ("m", "p"), "duration": ("m", "p")}
+    client.app.state.model_artifacts = ("m", "p")
 
     response = client.post(
         "/predict",
@@ -70,7 +73,8 @@ def test_predict_rejects_invalid_phoneme(client):
 
 
 def test_predict_requires_models_loaded(client):
-    client.app.state.models = {}
+    if hasattr(client.app.state, "model_artifacts"):
+        del client.app.state.model_artifacts
 
     response = client.post(
         "/predict",
@@ -79,7 +83,7 @@ def test_predict_requires_models_loaded(client):
     )
 
     assert response.status_code == 500
-    assert response.json()["detail"] == "Models are not loaded."
+    assert response.json()["detail"] == "Model is not loaded."
 
 
 def test_predict_handles_audio_value_error(client, monkeypatch):
@@ -89,7 +93,7 @@ def test_predict_handles_audio_value_error(client, monkeypatch):
         raise ValueError("Audio too long.")
 
     monkeypatch.setattr(routes_module, "process_audio_bytes", fake_process_audio_bytes)
-    client.app.state.models = {"quality": ("m", "p"), "duration": ("m", "p")}
+    client.app.state.model_artifacts = ("m", "p")
 
     response = client.post(
         "/predict",
@@ -108,7 +112,7 @@ def test_predict_handles_audio_exception(client, monkeypatch):
         raise RuntimeError("Bad audio")
 
     monkeypatch.setattr(routes_module, "process_audio_bytes", fake_process_audio_bytes)
-    client.app.state.models = {"quality": ("m", "p"), "duration": ("m", "p")}
+    client.app.state.model_artifacts = ("m", "p")
 
     response = client.post(
         "/predict",
@@ -127,11 +131,11 @@ def test_predict_handles_inference_exception(client, monkeypatch):
         routes_module, "process_audio_bytes", lambda _b: torch.zeros(1, 16000)
     )
 
-    def fake_run_model_inference(_waveform, _phonemes, _model, _processor):
+    def fake_run_model_inference(_waveform, _phonemes, _model, _processor, *_args):
         raise RuntimeError("Boom")
 
     monkeypatch.setattr(routes_module, "run_model_inference", fake_run_model_inference)
-    client.app.state.models = {"quality": ("m", "p"), "duration": ("m", "p")}
+    client.app.state.model_artifacts = ("m", "p")
 
     response = client.post(
         "/predict",

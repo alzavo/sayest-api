@@ -12,10 +12,9 @@ def test_lifespan_loads_and_unloads_models(monkeypatch):
     from app.main import app
 
     with TestClient(app) as client:
-        assert "quality" in client.app.state.models
-        assert "duration" in client.app.state.models
+        assert client.app.state.model_artifacts == ("model", "proc")
 
-    assert not app.state.models
+    assert not hasattr(app.state, "model_artifacts")
 
 
 def test_lifespan_logs_and_aborts_on_load_failure(monkeypatch):
@@ -32,4 +31,4 @@ def test_lifespan_logs_and_aborts_on_load_failure(monkeypatch):
         with TestClient(app):
             pass
 
-    assert not hasattr(app.state, "models") or not app.state.models
+    assert not hasattr(app.state, "model_artifacts")
