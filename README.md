@@ -1,47 +1,43 @@
 # sayest-api
 
-API for pronunciation assessment. Accepts audio + transcription (phonemes) and returns quality and duration scores.
+API for pronunciation assessment. It accepts audio and a phoneme transcript, then returns per-phoneme scores for two heads from a single multihead model:
+- `quality`
+- `duration`
 
 ## Environment
 
-Required variables (use `.env` or export them):
-- `QUALITY_MODEL_PATH` - path or repo id for the quality model
-- `DURATION_MODEL_PATH` - path or repo id for the duration model
-- `QUALITY_PROB_GAP_DELTA` - optional float; if set, small probability gaps favor score 1 for quality
+Runtime variables:
+- `MODEL_PATH` - required; local path or Hugging Face repo id for the multihead model
+- `QUALITY_PROB_GAP_DELTA` - optional float; delta override for the `quality` head
+- `DURATION_PROB_GAP_DELTA` - optional float; delta override for the `duration` head
 
-### Quality delta example
+Build-time variable:
+- `MODEL_REPO_ID` - used by Docker build to download the model into the image
 
-With `QUALITY_PROB_GAP_DELTA=0.02`, the quality score uses probability gap tolerance to favor score 1
-when the model is only slightly more confident in an incorrect score.
+Create `.env` from the example:
+```bash
+cp .env.example .env
+```
 
-Example logits for two phonemes:
+## Delta Behavior
+
+Both heads support the same delta rule. If the model slightly prefers an incorrect class over the correct class, the API can still return score `1` when the probability gap is within the configured delta.
+
+Example with `QUALITY_PROB_GAP_DELTA=0.02`:
 ```text
 [[0.0, 0.03, -2.0], [0.0, 1.5, -2.0]]
 ```
 
 Rule:
-- Compute softmax probabilities.
-- If an incorrect class is higher than the correct class, but the gap is within delta,
-  return score 1 instead of the argmax score.
+- compute softmax probabilities
+- compare the probability of the correct class (`index 0`, score `1`) with the best incorrect class
+- if the incorrect class wins by at most `delta`, return score `1`
+- otherwise return the argmax score
 
-Phoneme 1 calculation:
-- exp(0.0)=1, exp(0.03)=1.03045, exp(-2)=0.13534, sum=2.16579
-- p_correct = 1 / 2.16579 = 0.4617
-- p_best_incorrect = 1.03045 / 2.16579 = 0.4760
-- gap = 0.4760 - 0.4617 = 0.0143 <= 0.02 → return score 1
-
-Phoneme 2 calculation:
-- exp(0.0)=1, exp(1.5)=4.4817, exp(-2)=0.13534, sum=5.6170
-- p_correct = 1 / 5.6170 = 0.1781
-- p_best_incorrect = 4.4817 / 5.6170 = 0.7977
-- gap = 0.7977 - 0.1781 = 0.6196 > 0.02 → return score 2
+For the first phoneme, the gap is small enough, so the score becomes `1`.
+For the second phoneme, the gap is much larger, so the argmax score is used.
 
 ## Development
-
-Create .env file:
-```bash
-cp .env.example .env
-```
 
 Install dependencies:
 ```bash
@@ -53,13 +49,33 @@ Run the API locally:
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --env-file .env
 ```
 
+The app serves:
+- the FastAPI API
+- the Gradio UI mounted at `/`
+
+## Phoneme Vocabulary
+
+The allowed phoneme set is stored in [app/constants/phonemes.py](/gpfs/mariana/smbhome/alzavo/devel/sayest-api/app/constants/phonemes.py).
+
+To regenerate it from a model vocabulary:
+```bash
+python scripts/update_phonemes_from_vocab.py /path/to/model_dir
+```
+
+The script reads `vocab.json` and filters out special tokens from:
+- `special_tokens_map.json`
+- `added_tokens.json`
+
+The word delimiter `|` is preserved in the generated set.
+
 ## Tests
 
+Run tests with:
 ```bash
 uv run pytest
 ```
 
-## Code style (Ruff)
+## Code Style
 
 Check:
 ```bash
@@ -76,59 +92,51 @@ Format check:
 uv run ruff format --check .
 ```
 
-## Production (Docker)
+## Docker
 
-Build image:
+Build the image:
 ```bash
 docker build -t sayest-api:latest .
 ```
 
-Run container:
+Build with a specific model repo:
+```bash
+docker build --build-arg MODEL_REPO_ID=alzavo/sayest-latest -t sayest-api:latest .
+```
+
+Run the container:
 ```bash
 docker run -p 8000:8000 sayest-api:latest
 ```
 
-Health check (API up):
+Health check:
 ```bash
 curl -f http://localhost:8000/openapi.json
 ```
 
-### Dockerfile notes
+### Dockerfile Notes
 
-The Docker image is built on `python:3.12-slim`, installs `ffmpeg` for audio decoding, and uses `uv` to install Python deps from `pyproject.toml`/`uv.lock`. It then downloads the models during build (so runtime can be offline) and launches `uvicorn`.
+The Docker image:
+- starts from `python:3.12-slim`
+- installs `ffmpeg` for audio decoding
+- installs Python dependencies with `uv`
+- downloads one multihead model during build by running `download_model.py`
+- sets `HF_HUB_OFFLINE=1` so runtime can stay offline
 
-### Hardware requirements (estimate)
+## Hardware Notes
 
-These are approximate for CPU-only inference and depend on the actual model sizes.
-- CPU: 2+ cores recommended (1 core works but concurrency will be limited).
-- RAM: ~1 GB for 1 worker and ~2 GB for 2 workers on this build (from `docker stats`). Each `uvicorn` worker loads its own model copy, so RAM scales roughly linearly; verify on your hardware and with your workload.
-- Storage: ~10.6 GB image size (includes models). Check actual size with `docker images` and `du -sh /models` inside the container.
+These are rough CPU-only estimates and depend on the actual model size and workload.
+- CPU: 2+ cores recommended
+- RAM: each `uvicorn` worker loads its own model copy, so memory scales roughly with worker count
+- Storage: image size includes the downloaded model under `/models`
 
-#### Worker scaling guidance
-
-Start with 1-2 workers unless you have a clear concurrent load profile. More workers increase RAM usage and can hurt latency if CPU is saturated.
-
-To set workers:
+To run more workers:
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 
-To scale workers in Docker, override the command:
+To override the command in Docker:
 ```bash
 docker run -p 8000:8000 sayest-api:latest \
   uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
-```
-
-#### Storage sizing
-
-You can measure the final image size and model cache:
-```bash
-docker images sayest-api:latest
-```
-```bash
-docker run --rm sayest-api:latest du -sh /models
-```
-To estimate RAM per worker, run with 1 worker, then increase and compare:
-```bash
-docker stats <container>
 ```
