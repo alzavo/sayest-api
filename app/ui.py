@@ -122,7 +122,9 @@ def create_gradio_app(app: FastAPI) -> gr.Blocks:
         q_scores = scores_by_head.get("quality")
         d_scores = scores_by_head.get("duration")
         if q_scores is None or d_scores is None:
-            logger.error("Model output is missing required heads: %s", scores_by_head.keys())
+            logger.error(
+                "Model output is missing required heads: %s", scores_by_head.keys()
+            )
             return (
                 "<p style='text-align:center; color:red;'>Internal model error.</p>",
                 "",

@@ -86,7 +86,9 @@ def _predict_scores(scores_tensor, delta=None, correct_index=0):
     return [int(score) + 1 for score in predicted_scores[0].cpu().tolist()]
 
 
-def run_model_inference(waveform, phonemes, model, processor, deltas=None, correct_index=0):
+def run_model_inference(
+    waveform, phonemes, model, processor, deltas=None, correct_index=0
+):
     """Runs the PyTorch inference for the multihead model."""
     device = model.device
 

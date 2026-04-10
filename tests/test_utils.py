@@ -115,9 +115,7 @@ def test_run_model_inference_scores(monkeypatch):
             assert token_mask.shape == canonical_token_ids.shape
             quality_scores = torch.tensor([[[2.0, 1.0, 0.0], [0.0, 1.0, 3.0]]])
             duration_scores = torch.tensor([[[3.0, 1.0], [0.0, 4.0]]])
-            return FakeOutputs(
-                {"quality": quality_scores, "duration": duration_scores}
-            )
+            return FakeOutputs({"quality": quality_scores, "duration": duration_scores})
 
     waveform = torch.zeros(1, 16000)
     processor = FakeProcessor()
@@ -164,9 +162,7 @@ def test_run_model_inference_applies_delta_for_correct_class():
         ):
             quality_scores = torch.tensor([[[0.0, 0.02, -2.0], [0.0, 1.5, -2.0]]])
             duration_scores = torch.tensor([[[0.0, 0.02], [0.0, 1.5]]])
-            return FakeOutputs(
-                {"quality": quality_scores, "duration": duration_scores}
-            )
+            return FakeOutputs({"quality": quality_scores, "duration": duration_scores})
 
     waveform = torch.zeros(1, 16000)
     processor = FakeProcessor()

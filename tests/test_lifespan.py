@@ -27,7 +27,7 @@ def test_lifespan_logs_and_aborts_on_load_failure(monkeypatch):
 
     from app.main import app
 
-    with pytest.raises(RuntimeError, match="generator didn't yield"):
+    with pytest.raises(RuntimeError, match="boom"):
         with TestClient(app):
             pass
 
