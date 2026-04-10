@@ -8,8 +8,10 @@ from app.model import utils as utils_module
 def test_process_audio_bytes_resamples_and_mono(monkeypatch):
     waveform = torch.ones((2, 8000))
 
-    def fake_load(_fileobj):
-        return waveform, 8000
+    def fake_read(_fileobj, dtype, always_2d):
+        assert dtype == "float32"
+        assert always_2d is True
+        return waveform.transpose(0, 1).numpy(), 8000
 
     resample_called = {"value": False}
 
@@ -22,7 +24,7 @@ def test_process_audio_bytes_resamples_and_mono(monkeypatch):
             resample_called["value"] = True
             return data
 
-    monkeypatch.setattr(utils_module.torchaudio, "load", fake_load)
+    monkeypatch.setattr(utils_module.sf, "read", fake_read)
     monkeypatch.setattr(utils_module.torchaudio.transforms, "Resample", FakeResample)
 
     result = utils_module.process_audio_bytes(b"fake")
@@ -35,10 +37,12 @@ def test_process_audio_bytes_rejects_too_long(monkeypatch):
     num_samples = int(MAX_AUDIO_DURATION_SECONDS * SAMPLING_RATE) + 1
     waveform = torch.zeros((1, num_samples))
 
-    def fake_load(_fileobj):
-        return waveform, SAMPLING_RATE
+    def fake_read(_fileobj, dtype, always_2d):
+        assert dtype == "float32"
+        assert always_2d is True
+        return waveform.transpose(0, 1).numpy(), SAMPLING_RATE
 
-    monkeypatch.setattr(utils_module.torchaudio, "load", fake_load)
+    monkeypatch.setattr(utils_module.sf, "read", fake_read)
 
     with pytest.raises(ValueError) as exc:
         utils_module.process_audio_bytes(b"fake")
@@ -49,13 +53,15 @@ def test_process_audio_bytes_rejects_too_long(monkeypatch):
 def test_process_audio_bytes_no_resample_when_sampling_rate_matches(monkeypatch):
     waveform = torch.ones((1, 16000))
 
-    def fake_load(_fileobj):
-        return waveform, SAMPLING_RATE
+    def fake_read(_fileobj, dtype, always_2d):
+        assert dtype == "float32"
+        assert always_2d is True
+        return waveform.transpose(0, 1).numpy(), SAMPLING_RATE
 
     def fail_resample(*_args, **_kwargs):
         raise AssertionError("Resample should not be called")
 
-    monkeypatch.setattr(utils_module.torchaudio, "load", fake_load)
+    monkeypatch.setattr(utils_module.sf, "read", fake_read)
     monkeypatch.setattr(utils_module.torchaudio.transforms, "Resample", fail_resample)
 
     result = utils_module.process_audio_bytes(b"fake")

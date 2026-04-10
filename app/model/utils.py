@@ -1,5 +1,6 @@
 import torch
 import torchaudio
+import soundfile as sf
 from io import BytesIO
 from transformers import Wav2Vec2Processor
 from app.model.gop_model import GOPPhonemeClassifier
@@ -24,7 +25,10 @@ def load_model_and_processor(model_repo_id: str):
 
 def process_audio_bytes(audio_bytes: bytes) -> torch.Tensor:
     """Converts raw bytes to a processed tensor ready for the model."""
-    waveform, original_sr = torchaudio.load(BytesIO(audio_bytes))
+    waveform, original_sr = sf.read(
+        BytesIO(audio_bytes), dtype="float32", always_2d=True
+    )
+    waveform = torch.from_numpy(waveform).transpose(0, 1)
 
     duration_seconds = waveform.shape[1] / original_sr
     if duration_seconds > MAX_AUDIO_DURATION_SECONDS:
