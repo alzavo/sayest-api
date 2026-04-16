@@ -57,27 +57,11 @@ Run the API locally:
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --env-file .env
 ```
 
-The app serves:
-
-- the FastAPI API
-- the Gradio UI mounted at `/`
+The app serves the FastAPI API.
 
 ## Phoneme Vocabulary
 
-The allowed phoneme set is stored in [app/constants/phonemes.py](/gpfs/mariana/smbhome/alzavo/devel/sayest-api/app/constants/phonemes.py).
-
-To regenerate it from a model vocabulary:
-
-```bash
-python scripts/update_phonemes_from_vocab.py /path/to/model_dir
-```
-
-The script reads `vocab.json` and filters out special tokens from:
-
-- `special_tokens_map.json`
-- `added_tokens.json`
-
-The word delimiter `|` is preserved in the generated set.
+The allowed phoneme set is stored in app/constants/phonemes.py.
 
 ## Tests
 

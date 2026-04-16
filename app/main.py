@@ -1,9 +1,7 @@
 from fastapi import FastAPI
-import gradio as gr
 from .api.routes import router
 from .core.lifespan import lifespan
 from .core.logging import setup_logging
-from .ui import create_gradio_app
 
 setup_logging()
 
@@ -15,6 +13,3 @@ app = FastAPI(
 )
 
 app.include_router(router)
-
-demo = create_gradio_app(app).queue(default_concurrency_limit=2)
-app = gr.mount_gradio_app(app, demo, path="/")
