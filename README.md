@@ -115,6 +115,33 @@ If you previously built an image that pulled CUDA PyTorch wheels into the slim b
 docker build --no-cache --build-arg MODEL_REPO_ID=alzavo/sayest-latest -t sayest-api:latest .
 ```
 
+### Docker Dependencies
+
+The Docker image installs Python dependencies from `requirements-docker.txt`.
+
+This file is generated specifically for the container runtime so the image uses
+CPU-only PyTorch wheels:
+
+- `torch==...+cpu`
+- `torchaudio==...+cpu`
+
+This avoids pulling large CUDA/NVIDIA packages into the image.
+
+`requirements-docker.txt` is generated from `pyproject.toml` with:
+
+```bash
+uv pip compile pyproject.toml --no-emit-package sayest-api --torch-backend cpu -o requirements-docker.txt
+```
+
+If you change runtime dependencies in `pyproject.toml`, update both lock files
+before rebuilding the image:
+
+```bash
+uv lock
+uv pip compile pyproject.toml --no-emit-package sayest-api --torch-backend cpu -o requirements-docker.txt
+docker build --no-cache -t sayest-api:latest .
+```
+
 Run the container:
 
 ```bash
@@ -148,8 +175,7 @@ curl -f http://localhost:8000/openapi.json
 The Docker image:
 
 - starts from `python:3.12-slim`
-- installs `ffmpeg` for audio decoding
-- installs CPU-only `torch` and `torchaudio` wheels so audio decoding works in the non-CUDA container
+- installs CPU-only `torch` and `torchaudio` wheels
 - installs Python dependencies with `uv`
 - downloads one multihead model during build by running `download_model.py`
 - sets `HF_HUB_OFFLINE=1` so runtime can stay offline
