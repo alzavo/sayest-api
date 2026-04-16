@@ -141,6 +141,7 @@ These are rough CPU-only estimates and depend on the actual model size and workl
 - CPU: 2+ cores recommended
 - RAM: each `uvicorn` worker loads its own model copy, so memory scales roughly with worker count
 - Storage: image size includes the downloaded model under `/models`
+- Request handling is synchronous; for concurrent users, scale with additional `uvicorn` workers
 
 To run more workers:
 
