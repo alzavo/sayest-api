@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel, Wav2Vec2Config, Wav2Vec2ForCTC
+from transformers import AutoConfig, AutoModel, PreTrainedModel, Wav2Vec2Config, Wav2Vec2ForCTC
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_outputs import SequenceClassifierOutput
 
@@ -391,7 +391,7 @@ class GOPPhonemeClassifier(PreTrainedModel):
         device = input_values.device
 
         return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
+            return_dict if return_dict is not None else self.config.return_dict
         )
         labels = self._prepare_labels(labels)
 
@@ -557,3 +557,7 @@ class GOPPhonemeClassifier(PreTrainedModel):
             hidden_states=None,
             attentions=None,
         )
+
+
+AutoConfig.register(GOPWav2Vec2Config.model_type, GOPWav2Vec2Config)
+AutoModel.register(GOPWav2Vec2Config, GOPPhonemeClassifier)
