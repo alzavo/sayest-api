@@ -441,7 +441,9 @@ class GOPPhonemeClassifier(PreTrainedModel):
             input_lengths_frames, max=log_probs_TNC.size(0)
         )
 
-        max_token_len = canonical_token_ids.size(1) if canonical_token_ids is not None else 0
+        max_token_len = (
+            canonical_token_ids.size(1) if canonical_token_ids is not None else 0
+        )
         batch_combined_features_list = []
 
         token_embeddings = self.token_embedding(canonical_token_ids)
@@ -480,7 +482,9 @@ class GOPPhonemeClassifier(PreTrainedModel):
                     item_tokens = canonical_token_ids[
                         b_idx, : token_lengths[b_idx]
                     ].tolist()
-                    del_tokens_list = item_tokens[:token_idx] + item_tokens[token_idx + 1 :]
+                    del_tokens_list = (
+                        item_tokens[:token_idx] + item_tokens[token_idx + 1 :]
+                    )
                     if not del_tokens_list:
                         log_prob_del_item = torch.tensor(-float("inf"), device=device)
                     else:
