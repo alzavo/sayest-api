@@ -11,20 +11,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /code
 
-RUN --mount=type=cache,target=/var/cache/apt \
-    apt-get update && \
-    apt-get install -y ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
-
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/
-COPY pyproject.toml uv.lock ./
+COPY requirements-docker.txt ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system \
-    --index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://pypi.org/simple \
-    torch==2.8.0 \
-    torchaudio==2.8.0 \
-    .
+    uv pip install --system --exact --requirement requirements-docker.txt --torch-backend cpu
 
 COPY download_model.py .
 RUN python download_model.py
