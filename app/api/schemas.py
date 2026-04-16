@@ -11,7 +11,7 @@ class PhonemeScoreDetail(BaseModel):
 class PredictionResponse(BaseModel):
     success: bool
     word: Optional[str] = None
-    original_transcript: str
+    transcript: str
     details: List[PhonemeScoreDetail]
 
 

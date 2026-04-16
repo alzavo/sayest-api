@@ -43,7 +43,7 @@ def test_predict_happy_path(client, monkeypatch):
     payload = response.json()
     assert payload["success"] is True
     assert payload["word"] == "ai"
-    assert payload["original_transcript"] == "a i"
+    assert payload["transcript"] == "a i"
     assert len(payload["details"]) == 2
     assert payload["details"][0]["phoneme"] == "a"
     assert payload["details"][0]["quality_score"] == 1

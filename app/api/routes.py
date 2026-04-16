@@ -88,6 +88,6 @@ def predict_phonemes(
     return {
         "success": True,
         "word": word,
-        "original_transcript": phonemes,
+        "transcript": phonemes,
         "details": details,
     }
