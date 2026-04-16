@@ -1,5 +1,4 @@
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request
-from fastapi.concurrency import run_in_threadpool
 from app.api.schemas import PredictionResponse, ErrorResponse
 from app.constants.phonemes import ALL_PHONEMES
 from app.constants.environmental_variables import (
@@ -23,7 +22,7 @@ router = APIRouter()
         500: {"model": ErrorResponse},
     },
 )
-async def predict_phonemes(
+def predict_phonemes(
     request: Request,
     phonemes: str = Form(..., description="Space-separated phonemes"),
     word: str = Form(None),
@@ -41,7 +40,7 @@ async def predict_phonemes(
         raise HTTPException(status_code=500, detail="Model is not loaded.")
 
     try:
-        content = await audio.read()
+        content = audio.file.read()
         waveform = process_audio_bytes(content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -51,8 +50,7 @@ async def predict_phonemes(
 
     try:
         model, processor = request.app.state.model_artifacts
-        scores_by_head = await run_in_threadpool(
-            run_model_inference,
+        scores_by_head = run_model_inference(
             waveform,
             phoneme_list,
             model,
@@ -63,7 +61,6 @@ async def predict_phonemes(
             },
             0,
         )
-
     except Exception as e:
         logger.error(f"Inference failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal model error.")
