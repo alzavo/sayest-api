@@ -59,6 +59,10 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --env-file .env
 
 The app serves the FastAPI API.
 
+For local development, `MODEL_PATH` can be set to the Hugging Face repo id
+`alzavo/sayest-latest`. In that case, the app uses the downloaded model from
+the local Hugging Face cache.
+
 ## Phoneme Vocabulary
 
 The allowed phoneme set is stored in app/constants/phonemes.py.
@@ -116,6 +120,22 @@ Run the container:
 ```bash
 docker run -p 8000:8000 sayest-api:latest
 ```
+
+Run the container with a specific environment file:
+
+```bash
+docker run --env-file .env -p 8000:8000 sayest-api:latest
+```
+
+The runtime environment file is used for values such as `MODEL_PATH`,
+`QUALITY_PROB_GAP_DELTA`, and `DURATION_PROB_GAP_DELTA`. If you want to change
+which model gets downloaded into the image during the build, use the
+`MODEL_REPO_ID` build argument shown above.
+
+When running locally, `MODEL_PATH` can be a Hugging Face repo id such as
+`alzavo/sayest-latest`, which resolves to the cached downloaded model. Inside
+the Docker image, the model is downloaded into `/models`, so `MODEL_PATH`
+should be `/models/<model-id>`, for example `/models/alzavo/sayest-latest`.
 
 Health check:
 
