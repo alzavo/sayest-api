@@ -1,7 +1,9 @@
 import torch
 import pytest
+from transformers import AutoConfig
 
 from app.constants.audio_properties import MAX_AUDIO_DURATION_SECONDS, SAMPLING_RATE
+from app.model.gop_model import GOPWav2Vec2Config
 from app.model import utils as utils_module
 
 
@@ -184,3 +186,9 @@ def test_run_model_inference_applies_delta_for_correct_class():
     )
 
     assert scores == {"quality": [1, 2], "duration": [1, 2]}
+
+
+def test_custom_gop_config_is_registered_with_auto_config():
+    config = AutoConfig.for_model("gop-wav2vec2")
+
+    assert isinstance(config, GOPWav2Vec2Config)
